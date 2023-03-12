@@ -1,0 +1,19 @@
+[package]
+name = "mysynth"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+nih_plug = { path = "../nih-plug", features = ["assert_process_allocs"] }
+
+rand = "0.8.5"
+rand_pcg = "0.3.1"
+
+
+[lib]
+name = "mysynth"
+crate-type=["cdylib"]
+[workspace]
+members = ["xtask"]
