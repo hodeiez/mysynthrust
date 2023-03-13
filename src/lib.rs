@@ -1,7 +1,13 @@
+mod params;
+mod synth_core;
+mod voice;
 use nih_plug::prelude::*;
+use params::MySynthParams;
 use rand::Rng;
 use rand_pcg::Pcg32;
 use std::sync::Arc;
+use synth_core::MySynth;
+use voice::Voice;
 
 /// The number of simultaneous voices for this synth.
 const NUM_VOICES: u32 = 16;
@@ -14,74 +20,74 @@ const MAX_BLOCK_SIZE: usize = 64;
 // correct parameter.
 const GAIN_POLY_MOD_ID: u32 = 0;
 
-/// A simple polyphonic synthesizer with support for CLAP's polyphonic modulation. See
-/// `NoteEvent::PolyModulation` for another source of information on how to use this.
-struct PolyModSynth {
-    params: Arc<PolyModSynthParams>,
+// /// A simple polyphonic synthesizer with support for CLAP's polyphonic modulation. See
+// /// `NoteEvent::PolyModulation` for another source of information on how to use this.
+// struct MySynth {
+//     params: Arc<MySynthParams>,
 
-    /// A pseudo-random number generator. This will always be reseeded with the same seed when the
-    /// synth is reset. That way the output is deterministic when rendering multiple times.
-    prng: Pcg32,
-    /// The synth's voices. Inactive voices will be set to `None` values.
-    voices: [Option<Voice>; NUM_VOICES as usize],
-    /// The next internal voice ID, used only to figure out the oldest voice for voice stealing.
-    /// This is incremented by one each time a voice is created.
-    next_internal_voice_id: u64,
-}
+//     /// A pseudo-random number generator. This will always be reseeded with the same seed when the
+//     /// synth is reset. That way the output is deterministic when rendering multiple times.
+//     prng: Pcg32,
+//     /// The synth's voices. Inactive voices will be set to `None` values.
+//     voices: [Option<Voice>; NUM_VOICES as usize],
+//     /// The next internal voice ID, used only to figure out the oldest voice for voice stealing.
+//     /// This is incremented by one each time a voice is created.
+//     next_internal_voice_id: u64,
+// }
 
-#[derive(Params)]
-struct PolyModSynthParams {
-    /// A voice's gain. This can be polyphonically modulated.
-    #[id = "gain"]
-    gain: FloatParam,
-    /// The amplitude envelope attack time. This is the same for every voice.
-    #[id = "amp_atk"]
-    amp_attack_ms: FloatParam,
-    /// The amplitude envelope release time. This is the same for every voice.
-    #[id = "amp_rel"]
-    amp_release_ms: FloatParam,
-}
+// #[derive(Params)]
+// struct MySynthParams {
+//     /// A voice's gain. This can be polyphonically modulated.
+//     #[id = "gain"]
+//     gain: FloatParam,
+//     /// The amplitude envelope attack time. This is the same for every voice.
+//     #[id = "amp_atk"]
+//     amp_attack_ms: FloatParam,
+//     /// The amplitude envelope release time. This is the same for every voice.
+//     #[id = "amp_rel"]
+//     amp_release_ms: FloatParam,
+// }
 
 /// Data for a single synth voice. In a real synth where performance matter, you may want to use a
 /// struct of arrays instead of having a struct for each voice.
-#[derive(Debug, Clone)]
-struct Voice {
-    /// The identifier for this voice. Polyphonic modulation events are linked to a voice based on
-    /// these IDs. If the host doesn't provide these IDs, then this is computed through
-    /// `compute_fallback_voice_id()`. In that case polyphonic modulation will not work, but the
-    /// basic note events will still have an effect.
-    voice_id: i32,
-    /// The note's channel, in `0..16`. Only used for the voice terminated event.
-    channel: u8,
-    /// The note's key/note, in `0..128`. Only used for the voice terminated event.
-    note: u8,
-    /// The voices internal ID. Each voice has an internal voice ID one higher than the previous
-    /// voice. This is used to steal the last voice in case all 16 voices are in use.
-    internal_voice_id: u64,
-    /// The square root of the note's velocity. This is used as a gain multiplier.
-    velocity_sqrt: f32,
+// #[derive(Debug, Clone)]
+// struct Voice {
+//     /// The identifier for this voice. Polyphonic modulation events are linked to a voice based on
+//     /// these IDs. If the host doesn't provide these IDs, then this is computed through
+//     /// `compute_fallback_voice_id()`. In that case polyphonic modulation will not work, but the
+//     /// basic note events will still have an effect.
+//     voice_id: i32,
+//     /// The note's channel, in `0..16`. Only used for the voice terminated event.
+//     channel: u8,
+//     /// The note's key/note, in `0..128`. Only used for the voice terminated event.
+//     note: u8,
+//     /// The voices internal ID. Each voice has an internal voice ID one higher than the previous
+//     /// voice. This is used to steal the last voice in case all 16 voices are in use.
+//     internal_voice_id: u64,
+//     /// The square root of the note's velocity. This is used as a gain multiplier.
+//     velocity_sqrt: f32,
 
-    /// The voice's current phase. This is randomized at the start of the voice
-    phase: f32,
-    /// The phase increment. This is based on the voice's frequency, derived from the note index.
-    /// Since we don't support pitch expressions or pitch bend, this value stays constant for the
-    /// duration of the voice.
-    phase_delta: f32,
-    /// Whether the key has been released and the voice is in its release stage. The voice will be
-    /// terminated when the amplitude envelope hits 0 while the note is releasing.
-    releasing: bool,
-    /// Fades between 0 and 1 with timings based on the global attack and release settings.
-    amp_envelope: Smoother<f32>,
+//     /// The voice's current phase. This is randomized at the start of the voice
+//     phase: f32,
+//     /// The phase increment. This is based on the voice's frequency, derived from the note index.
+//     /// Since we don't support pitch expressions or pitch bend, this value stays constant for the
+//     /// duration of the voice.
+//     phase_delta: f32,
+//     /// Whether the key has been released and the voice is in its release stage. The voice will be
+//     /// terminated when the amplitude envelope hits 0 while the note is releasing.
+//     releasing: bool,
+//     /// Fades between 0 and 1 with timings based on the global attack and release settings.
+//     amp_envelope: Smoother<f32>,
 
-    /// If this voice has polyphonic gain modulation applied, then this contains the normalized
-    /// offset and a smoother.
-    voice_gain: Option<(f32, Smoother<f32>)>,
-}
+//     /// If this voice has polyphonic gain modulation applied, then this contains the normalized
+//     /// offset and a smoother.
+//     voice_gain: Option<(f32, Smoother<f32>)>,
+// }
 
-impl Default for PolyModSynth {
+impl Default for MySynth {
     fn default() -> Self {
         Self {
-            params: Arc::new(PolyModSynthParams::default()),
+            params: Arc::new(MySynthParams::default()),
 
             prng: Pcg32::new(420, 1337),
             // `[None; N]` requires the `Some(T)` to be `Copy`able
@@ -91,56 +97,56 @@ impl Default for PolyModSynth {
     }
 }
 
-impl Default for PolyModSynthParams {
-    fn default() -> Self {
-        Self {
-            gain: FloatParam::new(
-                "Gain",
-                util::db_to_gain(-12.0),
-                // Because we're representing gain as decibels the range is already logarithmic
-                FloatRange::Linear {
-                    min: util::db_to_gain(-36.0),
-                    max: util::db_to_gain(0.0),
-                },
-            )
-            // This enables polyphonic mdoulation for this parameter by representing all related
-            // events with this ID. After enabling this, the plugin **must** start sending
-            // `VoiceTerminated` events to the host whenever a voice has ended.
-            .with_poly_modulation_id(GAIN_POLY_MOD_ID)
-            .with_smoother(SmoothingStyle::Logarithmic(5.0))
-            .with_unit(" dB")
-            .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
-            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
-            amp_attack_ms: FloatParam::new(
-                "Attack",
-                200.0,
-                FloatRange::Skewed {
-                    min: 0.0,
-                    max: 2000.0,
-                    factor: FloatRange::skew_factor(-1.0),
-                },
-            )
-            // These parameters are global (and they cannot be changed once the voice has started).
-            // They also don't need any smoothing themselves because they affect smoothing
-            // coefficients.
-            .with_step_size(0.1)
-            .with_unit(" ms"),
-            amp_release_ms: FloatParam::new(
-                "Release",
-                100.0,
-                FloatRange::Skewed {
-                    min: 0.0,
-                    max: 8000.0,
-                    factor: FloatRange::skew_factor(-1.0),
-                },
-            )
-            .with_step_size(0.1)
-            .with_unit(" ms"),
-        }
-    }
-}
+// impl Default for MySynthParams {
+//     fn default() -> Self {
+//         Self {
+//             gain: FloatParam::new(
+//                 "Gain",
+//                 util::db_to_gain(-12.0),
+//                 // Because we're representing gain as decibels the range is already logarithmic
+//                 FloatRange::Linear {
+//                     min: util::db_to_gain(-36.0),
+//                     max: util::db_to_gain(0.0),
+//                 },
+//             )
+//             // This enables polyphonic mdoulation for this parameter by representing all related
+//             // events with this ID. After enabling this, the plugin **must** start sending
+//             // `VoiceTerminated` events to the host whenever a voice has ended.
+//             .with_poly_modulation_id(GAIN_POLY_MOD_ID)
+//             .with_smoother(SmoothingStyle::Logarithmic(5.0))
+//             .with_unit(" dB")
+//             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
+//             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+//             amp_attack_ms: FloatParam::new(
+//                 "Attack",
+//                 200.0,
+//                 FloatRange::Skewed {
+//                     min: 0.0,
+//                     max: 2000.0,
+//                     factor: FloatRange::skew_factor(-1.0),
+//                 },
+//             )
+//             // These parameters are global (and they cannot be changed once the voice has started).
+//             // They also don't need any smoothing themselves because they affect smoothing
+//             // coefficients.
+//             .with_step_size(0.1)
+//             .with_unit(" ms"),
+//             amp_release_ms: FloatParam::new(
+//                 "Release",
+//                 100.0,
+//                 FloatRange::Skewed {
+//                     min: 0.0,
+//                     max: 8000.0,
+//                     factor: FloatRange::skew_factor(-1.0),
+//                 },
+//             )
+//             .with_step_size(0.1)
+//             .with_unit(" ms"),
+//         }
+//     }
+// }
 
-impl Plugin for PolyModSynth {
+impl Plugin for MySynth {
     const NAME: &'static str = "Poly Mod Synth";
     const VENDOR: &'static str = "Moist Plugins GmbH";
     const URL: &'static str = "https://youtu.be/dQw4w9WgXcQ";
@@ -433,7 +439,7 @@ impl Plugin for PolyModSynth {
     }
 }
 
-impl PolyModSynth {
+impl MySynth {
     /// Get the index of a voice by its voice ID, if the voice exists. This does not immediately
     /// reutnr a reference to the voice to avoid lifetime issues.
     fn get_voice_idx(&mut self, voice_id: i32) -> Option<usize> {
@@ -588,32 +594,32 @@ const fn compute_fallback_voice_id(note: u8, channel: u8) -> i32 {
     note as i32 | ((channel as i32) << 16)
 }
 
-impl ClapPlugin for PolyModSynth {
-    const CLAP_ID: &'static str = "com.moist-plugins-gmbh.poly-mod-synth";
-    const CLAP_DESCRIPTION: Option<&'static str> =
-        Some("A simple polyphonic synthesizer with support for polyphonic modulation");
-    const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
-    const CLAP_SUPPORT_URL: Option<&'static str> = None;
-    const CLAP_FEATURES: &'static [ClapFeature] = &[
-        ClapFeature::Instrument,
-        ClapFeature::Synthesizer,
-        ClapFeature::Stereo,
-    ];
+// impl ClapPlugin for MySynth {
+//     const CLAP_ID: &'static str = "com.moist-plugins-gmbh.poly-mod-synth";
+//     const CLAP_DESCRIPTION: Option<&'static str> =
+//         Some("A simple polyphonic synthesizer with support for polyphonic modulation");
+//     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
+//     const CLAP_SUPPORT_URL: Option<&'static str> = None;
+//     const CLAP_FEATURES: &'static [ClapFeature] = &[
+//         ClapFeature::Instrument,
+//         ClapFeature::Synthesizer,
+//         ClapFeature::Stereo,
+//     ];
 
-    const CLAP_POLY_MODULATION_CONFIG: Option<PolyModulationConfig> = Some(PolyModulationConfig {
-        // If the plugin's voice capacity changes at runtime (for instance, when switching to a
-        // monophonic mode), then the plugin should inform the host in the `initialize()` function
-        // as well as in the `process()` function if it changes at runtime using
-        // `context.set_current_voice_capacity()`
-        max_voice_capacity: NUM_VOICES,
-        // This enables voice stacking in Bitwig.
-        supports_overlapping_voices: true,
-    });
-}
+//     const CLAP_POLY_MODULATION_CONFIG: Option<PolyModulationConfig> = Some(PolyModulationConfig {
+//         // If the plugin's voice capacity changes at runtime (for instance, when switching to a
+//         // monophonic mode), then the plugin should inform the host in the `initialize()` function
+//         // as well as in the `process()` function if it changes at runtime using
+//         // `context.set_current_voice_capacity()`
+//         max_voice_capacity: NUM_VOICES,
+//         // This enables voice stacking in Bitwig.
+//         supports_overlapping_voices: true,
+//     });
+// }
 
 // The VST3 verison of this plugin isn't too interesting as it will not support polyphonic
 // modulation
-impl Vst3Plugin for PolyModSynth {
+impl Vst3Plugin for MySynth {
     const VST3_CLASS_ID: [u8; 16] = *b"PolyM0dSynth1337";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
         Vst3SubCategory::Instrument,
@@ -622,5 +628,5 @@ impl Vst3Plugin for PolyModSynth {
     ];
 }
 
-// nih_export_clap!(PolyModSynth);
-nih_export_vst3!(PolyModSynth);
+// nih_export_clap!(MySynth);
+nih_export_vst3!(MySynth);
